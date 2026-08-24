@@ -1,0 +1,22 @@
+# Dependencias / entornos
+**/.venv/
+**/__pycache__/
+*.pyc
+**/node_modules/
+**/dist/
+**/.vite/
+
+# Artefactos de build de TypeScript
+**/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# Entorno y secretos
+backend/.env
+.DS_Store
+
+# Lineamientos propios cargados por el cliente (datos de negocio)
+backend/data/
+
+# Logs
+*.log

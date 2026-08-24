@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --primary: 0 0% 12%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 12%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 95%;
+    --accent-foreground: 0 0% 12%;
+    --border: 0 0% 89%;
+    --input: 0 0% 84%;
+    --ring: 0 0% 45%;
+    --radius: 0.5rem;
+    --brand: 206 100% 38%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    background-color: #faf9f8;
+  }
+}
+
+@layer utilities {
+  .surface {
+    @apply bg-card border border-border;
+  }
+  .brand {
+    color: hsl(var(--brand));
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 10px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(0 0% 82%);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(0 0% 70%);
+    background-clip: content-box;
+  }
+}
+
+.markdown p {
+  margin: 0.25rem 0;
+}
+.markdown ul {
+  margin: 0.35rem 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+}
+.markdown ol {
+  margin: 0.35rem 0;
+  padding-left: 1.2rem;
+  list-style: decimal;
+}
+.markdown a {
+  color: hsl(var(--brand));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown code {
+  background: hsl(0 0% 95%);
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.85em;
+  font-family: "Cascadia Code", ui-monospace, monospace;
+}
+.markdown strong {
+  color: hsl(0 0% 9%);
+  font-weight: 600;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem;
+  color: hsl(0 0% 9%);
+}
+.markdown h1 {
+  font-size: 1.15rem;
+}
+.markdown h2 {
+  font-size: 1.05rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid hsl(0 0% 92%);
+}
+.markdown h3 {
+  font-size: 0.95rem;
+  color: hsl(var(--brand));
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6rem 0;
+  font-size: 0.85em;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid hsl(0 0% 89%);
+}
+.markdown thead {
+  background: hsl(210 40% 97%);
+}
+.markdown th {
+  text-align: left;
+  font-weight: 600;
+  color: hsl(0 0% 12%);
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid hsl(0 0% 89%);
+}
+.markdown td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid hsl(0 0% 94%);
+  vertical-align: top;
+}
+.markdown tbody tr:last-child td {
+  border-bottom: none;
+}
+.markdown tbody tr:nth-child(even) {
+  background: hsl(0 0% 98.5%);
+}
+.markdown blockquote {
+  margin: 0.6rem 0;
+  padding: 0.5rem 0.9rem;
+  border-left: 3px solid hsl(var(--brand));
+  background: hsl(210 40% 98%);
+  border-radius: 0 8px 8px 0;
+  color: hsl(0 0% 25%);
+}
+.markdown hr {
+  margin: 0.9rem 0;
+  border: none;
+  border-top: 1px solid hsl(0 0% 91%);
+}
+.markdown pre {
+  margin: 0.5rem 0;
+  padding: 0.7rem 0.9rem;
+  background: hsl(0 0% 97%);
+  border: 1px solid hsl(0 0% 91%);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown li {
+  margin: 0.15rem 0;
+}
+.mermaid-figure svg {
+  max-width: 100%;
+  height: auto;
+}
+.table-scroll {
+  margin: 0.6rem 0;
+}
+.table-scroll table {
+  margin: 0;
+}
