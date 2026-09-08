@@ -15,6 +15,10 @@ frontend/vite.config.d.ts
 backend/.env
 .DS_Store
 
+# Estado y paquetes del despliegue fragmentado
+.deploy/
+*-package.zip
+
 # Lineamientos propios cargados por el cliente (datos de negocio)
 backend/data/
 
