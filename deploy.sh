@@ -19,6 +19,8 @@
 #   APP_SERVICE_SKU     (B1 por defecto; F1 para pruebas públicas sin cuota de VMs)
 #   PRIVATE_NETWORKING=true + (BYO) APP_INTEGRATION_SUBNET_ID PRIVATE_ENDPOINT_SUBNET_ID
 #     DNS_ZONE_SERVICES_AI_ID DNS_ZONE_SITES_ID [DNS_ZONE_OPENAI_ID DNS_ZONE_COGNITIVE_ID]
+#   DNS_SERVER=<ip|inherit>  (privado) por defecto 168.63.129.16 (Azure DNS); 'inherit' = DNS de la VNet (resolver del hub)
+#   FOUNDRY_RG BACKEND_RG FRONTEND_RG (y *_LOCATION)  RG/región por componente (hub-and-spoke multi-RG)
 #   SKIP_PUBLISH=true   (modo privado: genera el zip y no publica desde fuera de la VNET)
 set -euo pipefail
 
@@ -41,6 +43,10 @@ MODEL_CAPACITY="${MODEL_CAPACITY:-30}"
 APP_SERVICE_SKU="${APP_SERVICE_SKU:-B1}"
 PRIVATE_NETWORKING="${PRIVATE_NETWORKING:-false}"
 AZURE_AI_USER_ROLE="53ca6127-db72-4b80-b1b0-d745d6d5456d"
+# RG y región por componente (por defecto, los globales) — útil en hub-and-spoke multi-RG.
+FOUNDRY_RG="${FOUNDRY_RG:-$RESOURCE_GROUP}";   FOUNDRY_LOCATION="${FOUNDRY_LOCATION:-$LOCATION}"
+BACKEND_RG="${BACKEND_RG:-$RESOURCE_GROUP}";   BACKEND_LOCATION="${BACKEND_LOCATION:-$LOCATION}"
+FRONTEND_RG="${FRONTEND_RG:-$RESOURCE_GROUP}"; FRONTEND_LOCATION="${FRONTEND_LOCATION:-$LOCATION}"
 
 c_ok(){ printf '\033[0;32m%s\033[0m\n' "$*"; }
 c_info(){ printf '\033[0;36m%s\033[0m\n' "$*"; }
@@ -92,10 +98,11 @@ require_azure(){
   st_set prefix "$PREFIX"; st_set privateNetworking "$PRIVATE_NETWORKING"
 }
 
-ensure_rg(){
-  az group show -n "$RESOURCE_GROUP" >/dev/null 2>&1 || {
-    c_info "Creando grupo de recursos '$RESOURCE_GROUP' en '$LOCATION'..."
-    az group create -n "$RESOURCE_GROUP" -l "$LOCATION" -o none
+ensure_rg(){ # ensure_rg <rg> <location>
+  local rg="$1" loc="$2"
+  az group show -n "$rg" >/dev/null 2>&1 || {
+    c_info "Creando grupo de recursos '$rg' en '$loc'..."
+    az group create -n "$rg" -l "$loc" -o none
   }
 }
 
@@ -105,26 +112,27 @@ private_params_appservice(){
   : "${APP_INTEGRATION_SUBNET_ID:?Falta APP_INTEGRATION_SUBNET_ID (subred delegada a Microsoft.Web/serverFarms)}"
   : "${PRIVATE_ENDPOINT_SUBNET_ID:?Falta PRIVATE_ENDPOINT_SUBNET_ID}"
   : "${DNS_ZONE_SITES_ID:?Falta DNS_ZONE_SITES_ID (privatelink.azurewebsites.net)}"
-  echo "privateNetworking=true appIntegrationSubnetId=${APP_INTEGRATION_SUBNET_ID} privateEndpointSubnetId=${PRIVATE_ENDPOINT_SUBNET_ID} dnsZoneSitesId=${DNS_ZONE_SITES_ID}"
+  local dns="${DNS_SERVER:-168.63.129.16}"; [ "$dns" = "inherit" ] && dns=""
+  echo "privateNetworking=true appIntegrationSubnetId=${APP_INTEGRATION_SUBNET_ID} privateEndpointSubnetId=${PRIVATE_ENDPOINT_SUBNET_ID} dnsZoneSitesId=${DNS_ZONE_SITES_ID} dnsServer=${dns}"
 }
 
-publish_zip(){ # publish_zip <webapp> <zip> <label>
-  local name="$1" pkg="$2" label="$3"
+publish_zip(){ # publish_zip <rg> <webapp> <zip> <label>
+  local rg="$1" name="$2" pkg="$3" label="$4"
   if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
     c_warn "  [$label] App Service PRIVADO: la publicación requiere línea de vista a la VNET."
   fi
   if [[ "${SKIP_PUBLISH:-false}" == "true" ]]; then
     local outpkg="${ROOT_DIR}/${label}-package.zip"; cp "$pkg" "$outpkg"
     c_warn "  [$label] SKIP_PUBLISH=true. Paquete: ${outpkg}"
-    c_warn "  Publica desde la VNET: az webapp deploy -g ${RESOURCE_GROUP} -n ${name} --src-path ${outpkg} --type zip"
+    c_warn "  Publica desde la VNET: az webapp deploy -g ${rg} -n ${name} --src-path ${outpkg} --type zip"
     return
   fi
-  az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$name" --src-path "$pkg" --type zip -o none
+  az webapp deploy --resource-group "$rg" --name "$name" --src-path "$pkg" --type zip -o none
 }
 
 # ------------------------- FOUNDRY -------------------------
 cmd_foundry(){
-  require_azure; ensure_rg
+  require_azure; ensure_rg "$FOUNDRY_RG" "$FOUNDRY_LOCATION"
   local extra=""
   if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
     : "${PRIVATE_ENDPOINT_SUBNET_ID:?Falta PRIVATE_ENDPOINT_SUBNET_ID}"
@@ -134,31 +142,31 @@ cmd_foundry(){
   local pid; pid="$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo '')"
   c_info "==> [foundry] Desplegando cuenta AI + proyecto + modelo (${MODEL_NAME})..."
   local out
-  out="$(az deployment group create --name arqai-foundry -g "$RESOURCE_GROUP" -f "${INFRA_DIR}/foundry.bicep" \
-    -p prefix="$PREFIX" location="$LOCATION" modelName="$MODEL_NAME" modelVersion="$MODEL_VERSION" \
+  out="$(az deployment group create --name arqai-foundry -g "$FOUNDRY_RG" -f "${INFRA_DIR}/foundry.bicep" \
+    -p prefix="$PREFIX" location="$FOUNDRY_LOCATION" modelName="$MODEL_NAME" modelVersion="$MODEL_VERSION" \
        modelSku="$MODEL_SKU" modelCapacity="$MODEL_CAPACITY" principalId="$pid" principalType=User \
        ${extra} --query properties.outputs -o json)"
   local acc accid ep model proj
   acc="$(get_out "$out" accountName)"; accid="$(get_out "$out" accountId)"
   ep="$(get_out "$out" projectEndpoint)"; model="$(get_out "$out" modelDeploymentName)"; proj="$(get_out "$out" projectName)"
-  st_set_component foundry "$(py_obj deployedAt "$(now)" accountName "$acc" accountId "$accid" projectName "$proj" projectEndpoint "$ep" modelDeploymentName "$model")"
+  st_set_component foundry "$(py_obj deployedAt "$(now)" resourceGroup "$FOUNDRY_RG" accountName "$acc" accountId "$accid" projectName "$proj" projectEndpoint "$ep" modelDeploymentName "$model")"
   c_ok "==> [foundry] OK  endpoint=$ep  modelo=$model"
 }
 
 # ------------------------- BACKEND -------------------------
 cmd_backend(){
-  require_azure; ensure_rg
+  require_azure; ensure_rg "$BACKEND_RG" "$BACKEND_LOCATION"
   local ep model; ep="$(st_get foundry.projectEndpoint)"; model="$(st_get foundry.modelDeploymentName)"
   [ -n "$ep" ] || die "No hay estado de 'foundry'. Ejecuta primero: ./deploy.sh foundry"
   local extra; extra="$(private_params_appservice)"
   c_info "==> [backend] Desplegando App Service (API)..."
   local out
-  out="$(az deployment group create --name arqai-backend -g "$RESOURCE_GROUP" -f "${INFRA_DIR}/backend.bicep" \
-    -p prefix="$PREFIX" location="$LOCATION" appServiceSku="$APP_SERVICE_SKU" \
+  out="$(az deployment group create --name arqai-backend -g "$BACKEND_RG" -f "${INFRA_DIR}/backend.bicep" \
+    -p prefix="$PREFIX" location="$BACKEND_LOCATION" appServiceSku="$APP_SERVICE_SKU" \
        foundryProjectEndpoint="$ep" foundryModel="$model" ${extra} --query properties.outputs -o json)"
   local name url host pid
   name="$(get_out "$out" webAppName)"; url="$(get_out "$out" url)"; host="$(get_out "$out" hostname)"; pid="$(get_out "$out" principalId)"
-  st_set_component backend "$(py_obj deployedAt "$(now)" webAppName "$name" url "$url" hostname "$host" principalId "$pid")"
+  st_set_component backend "$(py_obj deployedAt "$(now)" resourceGroup "$BACKEND_RG" webAppName "$name" url "$url" hostname "$host" principalId "$pid")"
   c_info "==> [backend] Empaquetando y publicando código..."
   local staging pkgdir pkg
   staging="$(mktemp -d)"; pkgdir="$(mktemp -d)"; pkg="${pkgdir}/backend.zip"
@@ -167,24 +175,24 @@ cmd_backend(){
   cp "${ROOT_DIR}/backend/requirements.txt" "${staging}/requirements.txt"
   find "$staging" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
   ( cd "$staging" && zip -r -q "$pkg" . )
-  publish_zip "$name" "$pkg" "backend"
+  publish_zip "$BACKEND_RG" "$name" "$pkg" "backend"
   rm -rf "$staging" "$pkgdir"
   c_ok "==> [backend] OK  $url"
 }
 
 # ------------------------- FRONTEND ------------------------
 cmd_frontend(){
-  require_azure; ensure_rg
+  require_azure; ensure_rg "$FRONTEND_RG" "$FRONTEND_LOCATION"
   local beurl; beurl="$(st_get backend.url)"
   [ -n "$beurl" ] || die "No hay estado de 'backend'. Ejecuta primero: ./deploy.sh backend"
   local extra; extra="$(private_params_appservice)"
   c_info "==> [frontend] Desplegando App Service (SPA + proxy -> $beurl)..."
   local out
-  out="$(az deployment group create --name arqai-frontend -g "$RESOURCE_GROUP" -f "${INFRA_DIR}/frontend.bicep" \
-    -p prefix="$PREFIX" location="$LOCATION" appServiceSku="$APP_SERVICE_SKU" backendUrl="$beurl" ${extra} --query properties.outputs -o json)"
+  out="$(az deployment group create --name arqai-frontend -g "$FRONTEND_RG" -f "${INFRA_DIR}/frontend.bicep" \
+    -p prefix="$PREFIX" location="$FRONTEND_LOCATION" appServiceSku="$APP_SERVICE_SKU" backendUrl="$beurl" ${extra} --query properties.outputs -o json)"
   local name url host
   name="$(get_out "$out" webAppName)"; url="$(get_out "$out" url)"; host="$(get_out "$out" hostname)"
-  st_set_component frontend "$(py_obj deployedAt "$(now)" webAppName "$name" url "$url" hostname "$host")"
+  st_set_component frontend "$(py_obj deployedAt "$(now)" resourceGroup "$FRONTEND_RG" webAppName "$name" url "$url" hostname "$host")"
   need node; need npm
   c_info "==> [frontend] Compilando SPA..."
   npm --prefix "${ROOT_DIR}/frontend" ci
@@ -203,7 +211,7 @@ cmd_frontend(){
 }
 PJ
   ( cd "$staging" && zip -r -q "$pkg" . )
-  publish_zip "$name" "$pkg" "frontend"
+  publish_zip "$FRONTEND_RG" "$name" "$pkg" "frontend"
   rm -rf "$staging" "$pkgdir"
   c_ok "==> [frontend] OK  $url"
 }
@@ -222,10 +230,10 @@ cmd_connect(){
     c_warn "  rol ya existente o sin permiso para crearlo (revisa manualmente)."
   fi
   # Reiniciar el backend para que su asesor reintente la conexión con el RBAC ya asignado.
-  local bname; bname="$(st_get backend.webAppName)"
+  local bname brg; bname="$(st_get backend.webAppName)"; brg="$(st_get backend.resourceGroup)"; [ -n "$brg" ] || brg="$RESOURCE_GROUP"
   if [ -n "$bname" ]; then
     c_info "  reiniciando backend '$bname' para reintentar la conexión a Foundry..."
-    az webapp restart -g "$RESOURCE_GROUP" -n "$bname" -o none 2>/dev/null || true
+    az webapp restart -g "$brg" -n "$bname" -o none 2>/dev/null || true
   fi
   st_set_component connect "$(py_obj connectedAt "$(now)" backendPrincipalId "$pid" foundryAccountId "$accid")"
   c_ok "==> [connect] OK (propagación RBAC 1-5 min)"
@@ -236,9 +244,9 @@ cmd_validate(){
   require_azure
   local rc=0
   c_info "== VALIDACIÓN DE CONEXIONES =="
-  local acc accid; acc="$(st_get foundry.accountName)"; accid="$(st_get foundry.accountId)"
+  local acc accid frg; acc="$(st_get foundry.accountName)"; accid="$(st_get foundry.accountId)"; frg="$(st_get foundry.resourceGroup)"; [ -n "$frg" ] || frg="$RESOURCE_GROUP"
   if [ -n "$acc" ]; then
-    local pstate; pstate="$(az cognitiveservices account show -g "$RESOURCE_GROUP" -n "$acc" --query properties.provisioningState -o tsv 2>/dev/null || echo '?')"
+    local pstate; pstate="$(az cognitiveservices account show -g "$frg" -n "$acc" --query properties.provisioningState -o tsv 2>/dev/null || echo '?')"
     echo "  Foundry ($acc): provisioningState=$pstate"; [ "$pstate" = "Succeeded" ] || rc=1
     if [[ "$PRIVATE_NETWORKING" == "true" && -n "$accid" ]]; then
       local pe; pe="$(az network private-endpoint-connection list --id "$accid" --query "[].properties.privateLinkServiceConnectionState.status" -o tsv 2>/dev/null | tr '\n' ',' )"
@@ -252,10 +260,10 @@ cmd_validate(){
   fi
   if [[ "$PRIVATE_NETWORKING" == "true" ]]; then
     c_warn "  (modo privado: la salud HTTP se valida desde dentro de la VNET; aquí solo control-plane)"
-    local comp n
+    local comp n crg
     for comp in backend frontend; do
-      n="$(st_get ${comp}.webAppName)"
-      [ -n "$n" ] && echo "  ${comp} state: $(az webapp show -g "$RESOURCE_GROUP" -n "$n" --query state -o tsv 2>/dev/null || echo '?')"
+      n="$(st_get ${comp}.webAppName)"; crg="$(st_get ${comp}.resourceGroup)"; [ -n "$crg" ] || crg="$RESOURCE_GROUP"
+      [ -n "$n" ] && echo "  ${comp} state: $(az webapp show -g "$crg" -n "$n" --query state -o tsv 2>/dev/null || echo '?')"
     done
   else
     local beurl feurl
@@ -281,14 +289,32 @@ cmd_status(){ [ -f "$STATE_FILE" ] && python3 -m json.tool "$STATE_FILE" || echo
 
 cmd_destroy(){
   require_azure
-  c_warn "Esto ELIMINA el grupo de recursos '$RESOURCE_GROUP' y TODO su contenido."
+  local rgs
+  rgs="$(python3 - <<'PY'
+import json,os
+d=json.load(open(os.environ['STATE_FILE']))
+s=[]
+for c in ('foundry','backend','frontend'):
+    rg=(d.get(c) or {}).get('resourceGroup')
+    if rg and rg not in s: s.append(rg)
+if not s and d.get('resourceGroup'): s=[d['resourceGroup']]
+print('\n'.join(s))
+PY
+)"
+  [ -n "$rgs" ] || rgs="$RESOURCE_GROUP"
+  c_warn "Esto ELIMINA estos grupos de recursos y TODO su contenido:"
+  echo "$rgs" | sed 's/^/  - /'
   if [[ "${1:-}" != "--yes" && "${AUTO_YES:-false}" != "true" ]]; then
-    read -r -p "Escribe el nombre del grupo para confirmar: " ans
-    [ "$ans" = "$RESOURCE_GROUP" ] || die "cancelado."
+    read -r -p "Escribe 'ELIMINAR' para confirmar: " ans
+    [ "$ans" = "ELIMINAR" ] || die "cancelado."
   fi
-  az group delete -n "$RESOURCE_GROUP" --yes -o none
+  while IFS= read -r rg; do
+    [ -n "$rg" ] || continue
+    c_info "Eliminando '$rg'..."
+    az group delete -n "$rg" --yes -o none
+  done <<< "$rgs"
   echo '{}' > "$STATE_FILE"
-  c_ok "Grupo eliminado y estado reiniciado."
+  c_ok "Grupos eliminados y estado reiniciado."
 }
 
 cmd="${1:-help}"; shift || true
@@ -301,6 +327,6 @@ case "$cmd" in
   status)   cmd_status "$@";;
   all)      cmd_foundry; cmd_backend; cmd_frontend; cmd_connect; cmd_validate || true;;
   destroy)  cmd_destroy "$@";;
-  help|-h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//';;
+  help|-h|--help) awk 'NR>1 && /^#/{sub(/^# ?/,"");print;next} NR>1{exit}' "$0";;
   *) die "comando desconocido: '$cmd' (usa: foundry|backend|frontend|connect|validate|status|all|destroy)";;
 esac

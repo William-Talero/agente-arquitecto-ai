@@ -28,20 +28,26 @@ param privateEndpointSubnetId string = ''
 @description('Private DNS Zone privatelink.azurewebsites.net.')
 param dnsZoneSitesId string = ''
 
+@description('DNS del App Service en modo privado. 168.63.129.16 = Azure DNS (zonas enlazadas al spoke); vacío = hereda el DNS de la VNet (p.ej. DNS Private Resolver del hub).')
+param dnsServer string = '168.63.129.16'
+
 var suffix = uniqueString(resourceGroup().id)
 var planName = '${prefix}-be-plan'
 var webAppName = toLower('${prefix}-be-${suffix}')
 var publicAccess = privateNetworking ? 'Disabled' : 'Enabled'
-var privateAppSettings = privateNetworking ? [
-  {
-    name: 'WEBSITE_DNS_SERVER'
-    value: '168.63.129.16'
-  }
+var routeAllSetting = privateNetworking ? [
   {
     name: 'WEBSITE_VNET_ROUTE_ALL'
     value: '1'
   }
 ] : []
+var dnsServerSetting = (privateNetworking && !empty(dnsServer)) ? [
+  {
+    name: 'WEBSITE_DNS_SERVER'
+    value: dnsServer
+  }
+] : []
+var privateAppSettings = concat(routeAllSetting, dnsServerSetting)
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: planName
